@@ -1,6 +1,6 @@
 {
   "name": "plump-fish-tabs",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "胖鱼收纳 — a local-first Chrome tab companion",

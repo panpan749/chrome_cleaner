@@ -15,13 +15,14 @@ await import('../extension/background.js');
 await fixture.message('GET_STATE');
 await fixture.message('SET_WHITELIST',{tabId:6,value:true});
 await fixture.message('COLLECT',{tabId:7});await fixture.message('COLLECT',{tabId:8});
-let revision=0;fixture.api.storage.onChanged.addListener(()=>revision++);
+let revision=0; const requests=[]; fixture.api.storage.onChanged.addListener(()=>revision++);
 const server = createServer(async(req,res)=>{
   try {
     const url=new URL(req.url,'http://localhost');
     if(url.pathname==='/api') {
       let body='';for await(const chunk of req)body+=chunk;
       const input=JSON.parse(body);let result;
+      if(input.kind==='message')requests.push(input.type);
       if(input.kind==='message') result=await fixture.message(input.type,input.data,input.tabId?{id:fixture.api.runtime.id,url:fixture.tabs.get(input.tabId).url,tab:fixture.tabs.get(input.tabId)}:undefined);
       if(input.kind==='storageGet')result=await fixture.api.storage.local.get(input.keys);
       if(input.kind==='storageSet')result=await fixture.api.storage.local.set(input.patch);
@@ -72,6 +73,14 @@ try {
   assert.equal(bounds.y,8); assert.equal(bounds.x+184,1440-14);
   assert.equal(await page.locator('.trash-panel').isVisible(),false);
   await page.screenshot({path:'artifacts/pet-idle.png'}); pass('大肥鱼和垃圾桶常驻右上角，初始不展开任何面板');
+  await page.getByRole('switch',{name:'当前页面加入白名单'}).check();
+  await page.waitForFunction(()=>document.querySelector('#plump-fish-widget').shadowRoot.querySelector('.quick-protection').classList.contains('protected'));
+  assert.equal(await page.locator('.whitelist-drawer').isVisible(),false);
+  assert.equal((await fixture.message('GET_STATE')).tabs.find(t=>t.id===1).whitelisted,true);
+  assert.equal((await fixture.message('GET_STATE')).tabs.find(t=>t.id===2).whitelisted,false);
+  await page.getByRole('switch',{name:'当前页面加入白名单'}).uncheck();
+  await page.waitForFunction(()=>!document.querySelector('#plump-fish-widget').shadowRoot.querySelector('.quick-protection').classList.contains('protected'));
+  pass('外露白名单开关可直接开启和取消，仅作用于当前页，无需打开面板');
   await page.locator('#read-button').click();
   assert.equal(await page.locator('#read-button').textContent(),'继续阅读'); pass('桌宠透明区域外的网页按钮正常可点击');
   await page.locator('.bin').evaluate(button=>button.click());
@@ -88,7 +97,7 @@ try {
   await page.locator('.drawer-handle').click(); await page.getByRole('switch',{name:'当前页面加入白名单'}).check();
   await page.waitForFunction(()=>document.querySelector('#plump-fish-widget').shadowRoot.querySelector('.protect-help').textContent.includes('已被保护'));
   assert.equal((await fixture.message('GET_STATE')).tabs.find(t=>t.id===1).whitelisted,true);
-  await page.screenshot({path:'artifacts/whitelist-drawer.png',animations:'disabled'}); pass('垃圾桶下方抽拉开关仅保护当前网页标签');
+  await page.screenshot({path:'artifacts/whitelist-drawer.png',animations:'disabled'}); pass('保护说明与外露白名单开关保持同步');
   await page.locator('.settings-button').click();
   assert.ok(fixture.notices.some(n=>n.message.type==='OPTIONS_OPENED')); pass('小抽拉条可直接打开配置页');
   await page.locator('#read-button').click(); assert.equal(await page.locator('.whitelist-drawer').isVisible(),false); pass('点击网页空白收起面板，不妨碍网页操作');
@@ -131,6 +140,48 @@ try {
   await page.setViewportSize({width:390,height:700});await page.locator('.bin').click();await page.locator('.trash-panel').waitFor();
   const narrow=await page.locator('.trash-panel').boundingBox();assert.ok(narrow.x>=0&&narrow.x+narrow.width<=390);
   await page.screenshot({path:'artifacts/pet-narrow.png'});pass('小窗口中垃圾桶弹层不越过视口');
+  await page.locator('.close-panel').click(); await page.setViewportSize({width:1440,height:900});
+  await page.emulateMedia({reducedMotion:'reduce'});
+  const beforeDrag=await page.locator('#plump-fish-widget').boundingBox();
+  const sweepsBefore=requests.filter(type=>type==='SWEEP').length;
+  async function dragHandle(selector, dx, dy) {
+    const handle=await page.locator(selector).boundingBox();
+    const x=handle.x+handle.width/2,y=handle.y+handle.height/2;
+    await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(x+dx,y+dy,{steps:10});await page.mouse.up();
+  }
+  await dragHandle('.pet',-480,280);
+  const moved=await page.locator('#plump-fish-widget').boundingBox();
+  assert.ok(Math.abs(moved.x-(beforeDrag.x-480))<1&&Math.abs(moved.y-(beforeDrag.y+280))<1);
+  assert.equal(requests.filter(type=>type==='SWEEP').length,sweepsBefore);
+  assert.equal(await page.locator('.trash-panel').isVisible(),false);pass('拖动桌宠整体移动桌宠与垃圾桶，松手不会误触整理');
+  await page.waitForFunction(async()=>!!(await chrome.storage.local.get('petPosition')).petPosition);
+  const stored=(await fixture.api.storage.local.get('petPosition')).petPosition;
+  assert.ok(stored.x>=0&&stored.x<=1&&stored.y>=0&&stored.y<=1);
+  await page.reload();await page.addScriptTag({path:'extension/content.js'});
+  await page.waitForFunction(({x,y})=>{const rect=document.querySelector('#plump-fish-widget')?.getBoundingClientRect();return rect&&Math.abs(rect.x-x)<1&&Math.abs(rect.y-y)<1;},moved);
+  const another=await context.newPage();await another.setViewportSize({width:1440,height:900});
+  await another.goto(`${base}/fixture`);await another.addScriptTag({path:'extension/content.js'});
+  await another.waitForFunction(({x,y})=>{const rect=document.querySelector('#plump-fish-widget')?.getBoundingClientRect();return rect&&Math.abs(rect.x-x)<1&&Math.abs(rect.y-y)<1;},moved);
+  pass('位置保存为相对坐标，刷新和新页面均恢复');
+  await another.close();await page.bringToFront();
+  const sweepResponse=page.waitForResponse(response=>response.url()===`${base}/api`&&response.request().postDataJSON()?.type==='SWEEP');
+  await page.locator('.pet').click();await sweepResponse;
+  assert.equal(requests.filter(type=>type==='SWEEP').length,sweepsBefore+1);pass('拖动后正常单击桌宠仍触发整理');
+  const binBox=await page.locator('.bin').boundingBox();
+  await page.mouse.move(binBox.x+20,binBox.y+25);await page.mouse.down();await page.mouse.move(2,898,{steps:12});await page.mouse.up();
+  const corner=await page.locator('#plump-fish-widget').boundingBox();
+  assert.ok(corner.x>=8&&corner.y>=8&&corner.x+corner.width<=1440&&corner.y+corner.height<=900);
+  assert.equal(await page.locator('.trash-panel').isVisible(),false);pass('垃圾桶也能整体拖动，越界移动被限制且松手不误开小窗');
+  await page.locator('.bin').click();await page.locator('.trash-panel').waitFor();
+  const above=await page.locator('.trash-panel').boundingBox();
+  assert.ok(above.x>=0&&above.y>=0&&above.x+above.width<=1440&&above.y+above.height<=900);
+  assert.ok(above.y<corner.y);pass('移到左下角后垃圾桶小窗自动向上展开，保持可用');
+  await page.screenshot({path:'artifacts/draggable-pet.png'});
+  await page.locator('.close-panel').click();await page.locator('.drawer-handle').click();
+  await page.setViewportSize({width:320,height:260});
+  const resized=await page.locator('#plump-fish-widget').boundingBox(),info=await page.locator('.whitelist-drawer').boundingBox();
+  assert.ok(resized.x>=0&&resized.y>=0&&resized.x+resized.width<=320&&resized.y+resized.height<=260);
+  assert.ok(info.x>=0&&info.y>=0&&info.x+info.width<=320&&info.y+info.height<=260);pass('窗口缩小时重新约束桌宠位置与说明弹层，避免拖丢或遮出屏幕');
   assert.deepEqual(errors,[]);pass('配置与桌宠浏览器交互无未捕获异常');
   console.log(`\n${count} browser UI checks passed (Chrome APIs simulated).`);
 } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}

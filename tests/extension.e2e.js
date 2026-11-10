@@ -26,9 +26,9 @@ try {
   const send=(type,data={})=>options.evaluate(async({type,data})=>{const response=await chrome.runtime.sendMessage({type,...data});if(!response?.ok)throw new Error(response?.error);return response.data;},{type,data});
   let state=await send('GET_STATE');assert.equal(state.tabs.length,5);pass('原生扩展加载、现有标签同步和内容脚本注入');
   const ids=Array.from({length:5},(_,i)=>state.tabs.find(t=>t.url===`https://tab${i+1}.fish.test/`).id);
-  await pages[0].bringToFront();await pages[0].mouse.click(1396,129); await pages[0].mouse.click(1392,180);
+  await pages[0].bringToFront();await pages[0].mouse.click(1378,130);
   await options.waitForFunction(async tabId=>(await chrome.runtime.sendMessage({type:'GET_STATE'})).data.tabs.find(t=>t.id===tabId)?.whitelisted,ids[0]);
-  assert.equal((await send('GET_STATE')).tabs.find(t=>t.id===ids[0]).whitelisted,true);pass('网页抽拉开关保护当前标签');
+  assert.equal((await send('GET_STATE')).tabs.find(t=>t.id===ids[0]).whitelisted,true);pass('垃圾桶下方的外露开关直接保护当前标签');
   await worker.evaluate(tabId=>chrome.tabs.update(tabId,{pinned:true}),ids[1]);
   await send('SAVE_SETTINGS',{settings:{discardOnCollect:true}});await pages[4].bringToFront();
   await worker.evaluate(()=>{globalThis.actualNow=Date.now;Date.now=()=>actualNow()+61*60000;});

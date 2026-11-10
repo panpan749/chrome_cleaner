@@ -6,7 +6,7 @@ const definitions = [
   ['protectPinned','留着固定的标签','你特意固定的标签，不会被收走。','collection-settings'],
   ['protectAudible','不打扰正在播放的声音','音乐和会议播放声音时，不自动收纳。','collection-settings'],
   ['discardOnCollect','收纳时休眠标签','可选。请求 Chrome 卸载页面以释放内存，重新打开时会加载；未保存的页面状态可能丢失。','collection-settings'],
-  ['showWidget','在右上角显示大肥鱼','关闭后，可以通过浏览器工具栏图标打开垃圾桶。网页全屏时自动隐藏。','appearance-settings'],
+  ['showWidget','在网页上显示大肥鱼','按住桌宠或垃圾桶可一起拖动。关闭后可从浏览器工具栏打开垃圾桶；网页全屏时自动隐藏。','appearance-settings'],
   ['animations','眨眨眼，顺便收个标签','开启待机小动作和拖标签动画，也会尊重系统的“减少动态效果”设置。','appearance-settings']
 ];
 for (const [key,title,description,section] of definitions) $(section).insertAdjacentHTML('beforeend', `<div class="setting-row"><div><label for="setting-${key}">${title}</label><p>${description}</p></div><input id="setting-${key}" class="switch" type="checkbox" role="switch"></div>`);
