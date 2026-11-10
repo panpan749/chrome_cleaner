@@ -138,10 +138,39 @@ try {
   const options=await context.newPage();options.on('pageerror',e=>errors.push(e.message));
   await options.goto(`${base}/options.html`);await options.waitForFunction(()=>document.getElementById('idle-minutes').value==='60');
   await options.locator('#idle-minutes').fill('90');await options.locator('#sites').fill('https://github.com/my-repo');
-  await options.getByRole('button',{name:'记住这些习惯'}).click();await options.getByText('已保存，大肥鱼记住啦',{exact:true}).waitFor();
+  const notify=fixture.api.tabs.sendMessage;
+  fixture.api.tabs.sendMessage=async(id,message)=>{await notify(id,message);return new Promise(()=>{});};
+  try {
+    await options.getByRole('button',{name:'记住这些习惯'}).click();
+    await options.getByText('已保存，大肥鱼记住啦',{exact:true}).waitFor({timeout:5000});
+    assert.equal(await options.locator('.save-button').isEnabled(),true);
+    await page.locator('.bin').click();await page.locator('.trash-tab').first().waitFor({timeout:5000});
+    await page.locator('.close-panel').click();
+  } finally {fixture.api.tabs.sendMessage=notify;}
+  pass('网页不回复刷新通知时，配置仍保存成功且垃圾桶仍可打开');
   await options.reload();await options.waitForFunction(()=>document.getElementById('idle-minutes').value==='90');
   assert.equal(await options.locator('#sites').inputValue(),'github.com');
   await options.screenshot({path:'artifacts/options.png',fullPage:true}); pass('只有配置页，设置与整站规则正确保存');
+  await options.clock.install();
+  await options.evaluate(()=>{
+    window.realSendMessage=chrome.runtime.sendMessage;
+    window.stalledSaveCount=0;
+    chrome.runtime.sendMessage=message=>{
+      if(message.type==='SAVE_SETTINGS'){window.stalledSaveCount++;return new Promise(()=>{});}
+      return window.realSendMessage(message);
+    };
+  });
+  await options.getByRole('button',{name:'记住这些习惯'}).click();
+  assert.equal(await options.locator('.save-button').textContent(),'正在保存…');
+  assert.equal(await options.locator('.save-button').isDisabled(),true);
+  await options.clock.fastForward(10001);
+  await options.waitForFunction(()=>!document.querySelector('.save-button').disabled);
+  assert.match(await options.locator('#save-status').textContent(),/保存未确认.*响应超时/);
+  assert.equal(await options.evaluate(()=>window.stalledSaveCount),1);
+  await options.evaluate(()=>{chrome.runtime.sendMessage=window.realSendMessage;});await options.clock.resume();
+  await options.getByRole('button',{name:'记住这些习惯'}).click();
+  await options.getByText('已保存，大肥鱼记住啦',{exact:true}).waitFor();
+  pass('保存等待有状态，响应超时恢复按钮并提示确认结果，不自动重复提交');
   await options.locator('#setting-showWidget').uncheck();await options.getByRole('button',{name:'记住这些习惯'}).click();
   await page.locator('#plump-fish-widget').waitFor({state:'hidden'});
   await options.locator('#setting-showWidget').check();await options.getByRole('button',{name:'记住这些习惯'}).click();
@@ -154,6 +183,11 @@ try {
   await page.screenshot({path:'artifacts/pet-narrow.png'});pass('小窗口中垃圾桶弹层不越过视口');
   await page.locator('.close-panel').click(); await page.setViewportSize({width:1440,height:900});
   await page.emulateMedia({reducedMotion:'reduce'});
+  await page.locator('.no-motion').waitFor();
+  await page.waitForFunction(()=>{
+    const rect=document.querySelector('#plump-fish-widget').getBoundingClientRect();
+    return rect.x===innerWidth-198&&rect.y===8;
+  });
   const beforeDrag=await page.locator('#plump-fish-widget').boundingBox();
   const sweepsBefore=requests.filter(type=>type==='SWEEP').length;
   async function dragHandle(selector, dx, dy) {
@@ -201,6 +235,17 @@ try {
   const resized=await page.locator('#plump-fish-widget').boundingBox(),info=await page.locator('.whitelist-drawer').boundingBox();
   assert.ok(resized.x>=0&&resized.y>=0&&resized.x+resized.width<=320&&resized.y+resized.height<=260);
   assert.ok(info.x>=0&&info.y>=0&&info.x+info.width<=320&&info.y+info.height<=260);pass('窗口缩小时重新约束桌宠位置与说明弹层，避免拖丢或遮出屏幕');
+  await page.setViewportSize({width:1440,height:900});await page.clock.install();
+  await page.evaluate(()=>{
+    window.realSendMessage=chrome.runtime.sendMessage;
+    chrome.runtime.sendMessage=message=>message.type==='GET_TRASH'?new Promise(()=>{}):window.realSendMessage(message);
+  });
+  await page.locator('.bin').click();await page.clock.fastForward(10001);
+  await page.getByText(/插件响应超时/).waitFor();
+  await page.evaluate(()=>{chrome.runtime.sendMessage=window.realSendMessage;});await page.clock.resume();
+  await page.locator('.close-panel').click();await page.locator('.bin').click();
+  await page.locator('.trash-tab').first().waitFor();
+  pass('垃圾桶请求超时显示恢复提示，重新打开后可再次加载标签');
   assert.deepEqual(errors,[]);pass('配置与桌宠浏览器交互无未捕获异常');
   console.log(`\n${count} browser UI checks passed (Chrome APIs simulated).`);
 } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}

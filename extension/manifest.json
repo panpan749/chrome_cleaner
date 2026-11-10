@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "大肥鱼 · 标签桌宠",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "大肥鱼会收纳闲置标签。桌宠和垃圾桶可一起拖动，点击桶下方的开关直接保护当前页面。",
   "minimum_chrome_version": "120",
   "permissions": ["tabs", "tabGroups", "storage", "alarms", "scripting"],

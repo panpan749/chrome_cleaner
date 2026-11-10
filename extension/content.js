@@ -113,8 +113,16 @@
   }
   async function send(type, data = {}) {
     if (disposed) return;
-    try { const result = await chrome.runtime.sendMessage({ type, ...data }); if (!result?.ok) throw new Error(result?.error || '大肥鱼暂时没响应，请刷新网页'); return result.data; }
+    let timer;
+    try {
+      const result = await Promise.race([
+        chrome.runtime.sendMessage({ type, ...data }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('插件响应超时，请重新打开小窗确认结果；若仍无响应，请重新加载插件并刷新网页。')), 10000); })
+      ]);
+      if (!result?.ok) throw new Error(result?.error || '大肥鱼暂时没响应，请刷新网页'); return result.data;
+    }
     catch (error) { if (!chrome.runtime?.id) dispose(); throw error; }
+    finally { clearTimeout(timer); }
   }
   function dispose() {
     finishDrag(true);

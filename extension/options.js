@@ -18,12 +18,16 @@ async function load() {
 }
 $('settings-form').addEventListener('input', () => { $('save-status').textContent = '有尚未保存的修改'; });
 $('settings-form').addEventListener('submit', async event => {
-  event.preventDefault(); const button = document.querySelector('.save-button'); button.disabled = true;
+  event.preventDefault(); const button = document.querySelector('.save-button');
+  if (button.disabled) return;
+  const label = button.innerHTML; button.disabled = true; button.textContent = '正在保存…';
+  $('save-status').textContent = '正在保存…';
   try {
     const patch = { ...current, idleMinutes: Number($('idle-minutes').value), sites: $('sites').value.split(/\n/).map(x => x.trim()).filter(Boolean) };
     for (const [key] of definitions) patch[key] = $(`setting-${key}`).checked;
     const { settings } = await request('SAVE_SETTINGS', { settings: normalizeSettings(patch) }); current = settings;
     $('sites').value = current.sites.join('\n'); $('save-status').textContent = '已保存，大肥鱼记住啦'; toast('习惯已保存');
-  } catch (error) { toast(error.message,true); } finally { button.disabled = false; }
+  } catch (error) { $('save-status').textContent = `保存未确认：${error.message}`; toast(error.message,true); }
+  finally { button.disabled = false; button.innerHTML = label; }
 });
 load().catch(error => toast(error.message,true));

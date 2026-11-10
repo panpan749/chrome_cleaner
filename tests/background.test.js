@@ -84,4 +84,28 @@ test('后台生命周期、收纳、恢复与关闭流程（Chrome API 合约模
     await assert.rejects(send('RESTORE_TRASH',{tabId:2},sender),/已被取回或关闭/);
     await assert.rejects(send('SAVE_SETTINGS',{settings:{enabled:false}},sender),/不受支持/);
   });
+  await t.test('网页不响应通知时，保存、白名单、收纳和后续垃圾桶请求仍可完成',async()=> {
+    const originalSend=fixture.api.tabs.sendMessage, originalNow=Date.now;
+    let release;const unresponsive=new Promise(resolve=>{release=resolve;});
+    const notifications=[];
+    fixture.api.tabs.sendMessage=(id,message)=>{notifications.push(message.type);return unresponsive;};
+    async function responsive(promise) {
+      let timer;
+      try { return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('后台请求被网页通知阻塞')),500);})]); }
+      finally {clearTimeout(timer);}
+    }
+    try {
+      const saved=await responsive(send('SAVE_SETTINGS',{settings:{idleMinutes:90}}));
+      assert.equal(saved.settings.idleMinutes,90);
+      assert.equal((await fixture.api.storage.local.get('settings')).settings.idleMinutes,90);
+      assert.ok(Array.isArray((await responsive(send('GET_TRASH'))).tabs));
+      await responsive(send('SET_WHITELIST',{tabId:11,value:true}));
+      assert.equal((await responsive(send('GET_WIDGET',{tabId:11}))).whitelisted,true);
+      fixture.seed([{id:12}]);await responsive(send('GET_STATE'));
+      Date.now=()=>originalNow()+91*60000;
+      assert.ok((await responsive(send('SWEEP'))).count>0);
+      assert.ok((await responsive(send('GET_TRASH'))).tabs.some(tab=>tab.id===12));
+      assert.ok(notifications.includes('REFRESH_WIDGET'));assert.ok(notifications.includes('FISH_COLLECTED'));
+    } finally {Date.now=originalNow;fixture.api.tabs.sendMessage=originalSend;release();}
+  });
 });

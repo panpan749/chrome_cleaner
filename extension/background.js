@@ -34,9 +34,16 @@ async function init() {
 }
 async function getTab(id) { try { return await chrome.tabs.get(Number(id)); } catch { return null; } }
 function recordFor(tab) { return records[tab.id] ||= { lastActive: Date.now(), whitelisted: false }; }
+function notifyTab(id, message) {
+  // UI notifications have no reply data. A frozen/unresponsive page must not
+  // hold the serialized state queue and block saves or later bin requests.
+  void chrome.tabs.sendMessage(id, message).catch(() => {});
+}
 async function broadcastSettings() {
   const tabs = await chrome.tabs.query({});
-  await Promise.all(tabs.filter(t => webUrl(t.url)).map(t => chrome.tabs.sendMessage(t.id, { type: 'REFRESH_WIDGET' }).catch(() => {})));
+  for (const tab of tabs) {
+    if (webUrl(tab.url) && !tab.incognito && !tab.discarded && !tab.frozen) notifyTab(tab.id, { type: 'REFRESH_WIDGET' });
+  }
 }
 async function restore(id, activate = false) {
   const tab = await getTab(id), record = records[id];
@@ -84,7 +91,7 @@ async function sweep() {
   await persist();
   if (count && settings.animations) {
     const active = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (active[0]) await chrome.tabs.sendMessage(active[0].id, { type: 'FISH_COLLECTED', count, titles: titles.slice(0, 6) }).catch(() => {});
+    if (active[0]) notifyTab(active[0].id, { type: 'FISH_COLLECTED', count, titles: titles.slice(0, 6) });
   }
   return count;
 }
@@ -124,7 +131,7 @@ async function handle(message, sender) {
       const tab = await getTab(id); if (!tab || !webUrl(tab.url)) throw new Error('该标签已关闭或不支持');
       if (message.value) await restore(id);
       recordFor(tab).whitelisted = !!message.value;
-      await persist(); await chrome.tabs.sendMessage(id, { type: 'REFRESH_WIDGET' }).catch(() => {});
+      await persist(); notifyTab(id, { type: 'REFRESH_WIDGET' });
       return {};
     }
     case 'SAVE_SETTINGS': {
