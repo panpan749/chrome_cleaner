@@ -108,7 +108,7 @@ async function handle(message, sender) {
   switch (message.type) {
     case 'GET_STATE': return snapshot();
     case 'GET_WIDGET': { const tab = await getTab(id); return { settings, whitelisted: !!records[id]?.whitelisted, siteProtected: !!tab && siteProtected(tab, settings), trashCount: Object.values(records).filter(r => r.trashedAt).length }; }
-    case 'GET_TRASH': { const state = await snapshot(); return { tabs: state.tabs.filter(tab => tab.trashedAt), settings }; }
+    case 'GET_TRASH': { const state = await snapshot(); return { tabs: state.tabs.filter(tab => tab.trashedAt).sort((a, b) => b.lastActive - a.lastActive), settings }; }
     case 'RESTORE_TRASH': {
       const target = Number(message.tabId);
       if (!records[target]?.trashedAt) throw new Error('这个标签已被取回或关闭');

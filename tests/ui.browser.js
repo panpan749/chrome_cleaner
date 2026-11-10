@@ -11,10 +11,15 @@ const fixture = createChrome(); globalThis.chrome = fixture.api;
 const titles = ['Notion · 今天的灵感收集', 'Figma · 周末的小计划', '慢慢来，生活的答案不止一种', 'GitHub · 开源项目收藏', '一段适合专注的轻音乐', '本周任务 · 重要的事情', '日常的细节，也值得被记录', '设计中的留白与呼吸感'];
 const hosts = ['notion.so','figma.com','read.cv','github.com','music.163.com','linear.app','sspai.com','design.fish.test'];
 fixture.seed(titles.map((title,i)=>({id:i+1,title,url:`https://${hosts[i]}/article`,active:i===0,pinned:i===3,audible:i===4})));
+// The newer-used tab comes later in native order and is collected first.
+await fixture.api.storage.session.set({records:{
+  7:{lastActive:Date.now()-120*60000,whitelisted:false},
+  8:{lastActive:Date.now()-90*60000,whitelisted:false}
+}});
 await import('../extension/background.js');
 await fixture.message('GET_STATE');
 await fixture.message('SET_WHITELIST',{tabId:6,value:true});
-await fixture.message('COLLECT',{tabId:7});await fixture.message('COLLECT',{tabId:8});
+await fixture.message('COLLECT',{tabId:8});await fixture.message('COLLECT',{tabId:7});
 let revision=0; const requests=[]; fixture.api.storage.onChanged.addListener(()=>revision++);
 const server = createServer(async(req,res)=>{
   try {
@@ -87,9 +92,16 @@ try {
   assert.equal(await page.locator('.trash-panel').isVisible(),false); pass('网页脚本合成点击不能操作桌宠');
   await page.locator('.bin').click(); await page.locator('.trash-tab').first().waitFor();
   assert.equal(await page.locator('.trash-tab').count(),2);
-  await page.screenshot({path:'artifacts/trash-popover.png'}); await page.screenshot({path:'artifacts/pet-preview.png',clip:{x:1080,y:0,width:360,height:460}}); pass('点击垃圾桶就地展开小窗，只列出已收纳标签');
+  assert.deepEqual(await page.locator('.trash-tab').evaluateAll(tabs=>tabs.map(tab=>Number(tab.dataset.tabId))),[8,7]);
+  const sortedPopup=await context.newPage();await sortedPopup.goto(`${base}/popup.html`);
+  await sortedPopup.locator('.trash-tab').first().waitFor();
+  assert.deepEqual(await sortedPopup.locator('.trash-tab').evaluateAll(tabs=>tabs.map(tab=>Number(tab.dataset.tabId))),[8,7]);
+  await sortedPopup.close();await page.bringToFront();
+  await page.screenshot({path:'artifacts/trash-popover.png'}); await page.screenshot({path:'artifacts/pet-preview.png',clip:{x:1080,y:0,width:360,height:460}}); pass('网页和工具栏垃圾桶只列出已收纳标签，均按最后交互时间倒序');
   await page.locator('.search input').fill('不存在的标签'); await page.getByText('这次没找到',{exact:true}).waitFor();
-  await page.locator('.search input').fill(''); pass('垃圾桶搜索与空状态');
+  await page.locator('.search input').fill('https://');
+  assert.deepEqual(await page.locator('.trash-tab').evaluateAll(tabs=>tabs.map(tab=>Number(tab.dataset.tabId))),[8,7]);
+  await page.locator('.search input').fill(''); pass('垃圾桶搜索保持交互时间排序，并支持空状态');
   await page.locator('.trash-tab[data-tab-id="7"]').click();
   await page.locator('.trash-panel').waitFor({state:'hidden'});
   const restored=(await fixture.message('GET_STATE')).tabs.find(t=>t.id===7);
@@ -179,6 +191,13 @@ try {
   await page.screenshot({path:'artifacts/draggable-pet.png'});
   await page.locator('.close-panel').click();await page.locator('.drawer-handle').click();
   await page.setViewportSize({width:320,height:260});
+  await page.waitForFunction(()=>{
+    const host=document.querySelector('#plump-fish-widget');
+    return [host,host.shadowRoot.querySelector('.whitelist-drawer')].every(element=>{
+      const rect=element.getBoundingClientRect();
+      return rect.x>=0&&rect.y>=0&&rect.right<=innerWidth&&rect.bottom<=innerHeight;
+    });
+  });
   const resized=await page.locator('#plump-fish-widget').boundingBox(),info=await page.locator('.whitelist-drawer').boundingBox();
   assert.ok(resized.x>=0&&resized.y>=0&&resized.x+resized.width<=320&&resized.y+resized.height<=260);
   assert.ok(info.x>=0&&info.y>=0&&info.x+info.width<=320&&info.y+info.height<=260);pass('窗口缩小时重新约束桌宠位置与说明弹层，避免拖丢或遮出屏幕');
