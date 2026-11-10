@@ -1,0 +1,9 @@
+import { mkdir, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
+execFileSync(process.execPath, ['scripts/check.mjs'], { stdio:'inherit' });
+await mkdir('dist', { recursive:true });
+const output = path.resolve('dist/dafeiyu-v0.2.0.zip');
+await rm(output, { force:true });
+execFileSync('zip', ['-qr', output, '.'], { cwd:'extension', stdio:'inherit' });
+console.log(`Chrome unpacked-extension package: ${output}`);

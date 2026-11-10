@@ -1,0 +1,16 @@
+大肥鱼角色资产来源记录（随包许可文件，不显示在使用界面）
+
+作者：YunYueSama
+仓库：https://github.com/YunYueSama/codex-deepseek-pet
+固定版本：7661c8b304c5400701f91da01b1a643a207331de
+
+本项目使用 assets/whale/idle-front.png 和 assets/whale/dense-walk.png：
+- idle-front.png -> dafeiyu-idle.png，原始字节未修改
+  SHA-256: 79d3952acfe7620e0c2cfe7b80e9e6793d5f115252962f81cd56778402f4cdcd
+- dense-walk.png -> dafeiyu-walk.png，原始字节未修改
+  SHA-256: e72df3791354f28f7e0b822c405d9ea5ba355d9288d07fead8e558b2cee49667
+- icon16.png / icon48.png / icon128.png 为从待机素材浏览器渲染得到的尺寸适配图标（经过修改）。
+- 插件通过 CSS 取帧、缩放、眨眼和移动实现桌宠交互，未修改原图或移除图中标记。
+
+完整原始许可见 DAFEIYU-LICENSE.txt，第三方素材范围见 DAFEIYU-ASSET-LICENSE.md。
+这是非官方的社区二创形象使用，不表示 DeepSeek 或素材作者认可或代言本插件。

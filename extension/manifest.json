@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "大肥鱼 · 标签桌宠",
+  "version": "0.2.0",
+  "description": "右上角的大肥鱼会收纳闲置标签。点击垃圾桶取回标签，下拉开关保护当前页面。",
+  "minimum_chrome_version": "120",
+  "permissions": ["tabs", "tabGroups", "storage", "alarms", "scripting"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "大肥鱼的垃圾桶", "default_popup": "popup.html", "default_icon": { "16": "assets/icon16.png", "48": "assets/icon48.png", "128": "assets/icon128.png" } },
+  "icons": { "16": "assets/icon16.png", "48": "assets/icon48.png", "128": "assets/icon128.png" },
+  "options_page": "options.html",
+  "content_scripts": [{ "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle", "all_frames": false }],
+  "web_accessible_resources": [{ "resources": ["assets/dafeiyu-idle.png", "assets/dafeiyu-walk.png", "pet.css"], "matches": ["http://*/*", "https://*/*"] }],
+  "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'self'" }
+}
