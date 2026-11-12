@@ -19,25 +19,27 @@ test('后台生命周期、收纳、恢复与关闭流程（Chrome API 合约模
     const state=await send('GET_STATE');assert.equal(state.tabs.find(t=>t.id===1).whitelisted,true);assert.equal(state.tabs.find(t=>t.id===6).whitelisted,false);
     await assert.rejects(send('GET_STATE',{},sender),/不受支持/);
   });
-  await t.test('过期扫描保护当前、固定、音频、白名单；按窗口分组', async()=> {
+  await t.test('过期扫描保护当前、固定、音频、白名单；移到最小化窗口', async()=> {
     await send('SAVE_SETTINGS',{settings:{sites:['example.com']}});
     const original=Date.now;Date.now=()=>original()+61*60000;
     try { assert.equal((await send('SWEEP')).count,2); } finally {Date.now=original;}
     const state=await send('GET_STATE');assert.deepEqual(state.tabs.filter(t=>t.trashedAt).map(t=>t.id),[6,7]);
     assert.ok(state.tabs.filter(t=>t.trashedAt).every(t=>!t.discarded));
-    const groups=await fixture.api.tabGroups.query({title:GROUP_TITLE});assert.equal(groups.length,2);assert.ok(groups.every(g=>g.collapsed));
+    const groups=await fixture.api.tabGroups.query({title:GROUP_TITLE});assert.equal(groups.length,0);assert.equal(fixture.tabs.get(6).windowId,fixture.tabs.get(7).windowId);assert.equal((await fixture.api.windows.get(fixture.tabs.get(6).windowId)).state,'minimized');
   });
-  await t.test('取回和重新收纳；开启休眠才卸载页面', async()=> {
+  await t.test('取回和重新收纳；始终保留页面运行状态', async()=> {
     await send('RESTORE',{tabId:6});assert.equal(fixture.tabs.get(6).groupId,-1);
-    await send('SAVE_SETTINGS',{settings:{discardOnCollect:true}});await send('COLLECT',{tabId:6});assert.equal(fixture.tabs.get(6).discarded,true);
+    await send('SAVE_SETTINGS',{settings:{discardOnCollect:true}});await send('COLLECT',{tabId:6});assert.equal(fixture.tabs.get(6).discarded,false);
   });
   await t.test('取回恢复原分组', async()=> {
     await send('RESTORE',{tabId:6});
     const previous=await fixture.api.tabs.group({tabIds:6});await fixture.api.tabGroups.update(previous,{title:'工作'});
     await send('COLLECT',{tabId:6});await send('RESTORE',{tabId:6});assert.equal(fixture.tabs.get(6).groupId,previous);
   });
-  await t.test('浏览器直接激活会自动取回', async()=> {
+  await t.test('收纳窗口内部激活不取回，显式点击才取回', async()=> {
     await fixture.api.tabs.update(7,{active:true});
+    assert.ok((await send('GET_STATE')).tabs.find(t=>t.id===7).trashedAt);
+    await send('RESTORE_TRASH',{tabId:7});
     assert.equal((await send('GET_STATE')).tabs.find(t=>t.id===7).trashedAt,undefined);
   });
   await t.test('整站规则新增后自动恢复垃圾桶中的对应标签',async()=> {
@@ -57,9 +59,9 @@ test('后台生命周期、收纳、恢复与关闭流程（Chrome API 合约模
     const cleared=await send('EMPTY_TRASH',{tabIds:[1,1,999]});assert.equal(cleared.count,1);assert.equal(fixture.tabs.has(1),false);
     await assert.rejects(send('EMPTY_TRASH'),/确认/);
   });
-  await t.test('分组更新失败时回滚，不留下虚假回收站状态',async()=> {
-    fixture.seed([{id:9}]);const update=fixture.api.tabGroups.update;fixture.api.tabGroups.update=async()=>{throw new Error('Group update failed');};
-    try {await assert.rejects(send('COLLECT',{tabId:9}),/Group update failed/);}finally{fixture.api.tabGroups.update=update;}
+  await t.test('移动失败时回滚，不留下虚假回收站状态',async()=> {
+    fixture.seed([{id:9}]);const update=fixture.api.tabs.move;fixture.api.tabs.move=async()=>{throw new Error('Group update failed');};
+    try {await assert.rejects(send('COLLECT',{tabId:9}),/Group update failed/);}finally{fixture.api.tabs.move=update;}
     assert.equal((await send('GET_STATE')).tabs.find(t=>t.id===9).trashedAt,undefined);assert.equal(fixture.tabs.get(9).groupId,-1);
   });
   await t.test('失效配置拒绝保存，现有设置仍可使用',async()=> {
@@ -108,4 +110,24 @@ test('后台生命周期、收纳、恢复与关闭流程（Chrome API 合约模
       assert.ok(notifications.includes('REFRESH_WIDGET'));assert.ok(notifications.includes('FISH_COLLECTED'));
     } finally {Date.now=originalNow;fixture.api.tabs.sendMessage=originalSend;release();}
   });
+});
+
+test('旧分组迁移到收纳窗口，丢失会话后仍可识别并跨窗口取回', async()=>{
+  const fixture=createChrome(); globalThis.chrome=fixture.api;
+  fixture.seed([{id:21},{id:22,active:true,windowId:2}]);
+  const group=await fixture.api.tabs.group({tabIds:21});
+  await fixture.api.tabGroups.update(group,{title:GROUP_TITLE});
+  await import(`../extension/background.js?migration=${Date.now()}`);
+  let state=await fixture.message('GET_STATE');
+  const stored=state.tabs.find(t=>t.id===21);
+  assert.ok(stored.trashedAt); assert.notEqual(stored.windowId,1);
+  assert.equal(fixture.tabs.get(21).discarded,false);
+  await fixture.api.storage.session.clear();
+  await import(`../extension/background.js?restart=${Date.now()}`);
+  assert.ok((await fixture.message('GET_TRASH')).tabs.some(t=>t.id===21));
+  const sender={id:fixture.api.runtime.id,url:'https://site22.test/',tab:fixture.tabs.get(22)};
+  await fixture.message('RESTORE_TRASH',{tabId:21},sender);
+  assert.equal(fixture.tabs.get(21).windowId,2);
+  assert.equal(fixture.tabs.get(21).active,true);
+  assert.equal((await fixture.message('GET_TRASH')).tabs.length,0);
 });

@@ -22,6 +22,7 @@ export function normalizeSettings(input = {}) {
   result.idleMinutes = minutes;
   if (input.sites !== undefined && !Array.isArray(input.sites)) throw new Error('站点白名单格式不正确');
   result.sites = [...new Set((input.sites || []).map(normalizeSite).filter(Boolean))].slice(0, 200);
+  result.discardOnCollect = false;
   return result;
 }
 export function siteProtected(tab, settings) {

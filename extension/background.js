@@ -1,6 +1,8 @@
 import { DEFAULTS, GROUP_TITLE, normalizeSettings, eligible, protectionReason, siteProtected, webUrl } from './core.js';
 
 let records = {}, settings = { ...DEFAULTS }, totalCollected = 0, ready = false, lastTrashSignature = '';
+let storageWindowId = null;
+const storageUrl = () => chrome.runtime.getURL('storage.html');
 let tail = Promise.resolve();
 const serial = (fn, report = true) => { const task = tail.then(fn); tail = task.catch(error => { if (report) console.error(error); }); return task; };
 async function persist() {
@@ -19,14 +21,23 @@ async function init() {
   settings = normalizeSettings(local.settings || DEFAULTS);
   totalCollected = local.totalCollected || 0;
   records = session.records || {};
+  const marker = tabs.find(tab => tab.url === storageUrl());
+  storageWindowId = marker?.windowId ?? null;
   const groupIds = new Set(groups.map(group => group.id));
   const alive = new Set(tabs.map(tab => String(tab.id)));
   for (const id of Object.keys(records)) if (!alive.has(id)) delete records[id];
   for (const tab of tabs) {
     if (!webUrl(tab.url) || tab.incognito) continue;
     records[tab.id] ||= { lastActive: Date.now(), whitelisted: false };
-    if (groupIds.has(tab.groupId) && !records[tab.id].trashedAt) records[tab.id].trashedAt = Date.now();
-    if (records[tab.id].trashedAt && !groupIds.has(tab.groupId)) delete records[tab.id].trashedAt;
+    if ((groupIds.has(tab.groupId) || tab.windowId === storageWindowId) && !records[tab.id].trashedAt) records[tab.id].trashedAt = Date.now();
+    if (records[tab.id].trashedAt && !groupIds.has(tab.groupId) && tab.windowId !== storageWindowId) delete records[tab.id].trashedAt;
+  }
+  // Move legacy visible recycle groups without closing or reloading their tabs.
+  for (const tab of tabs) if (groupIds.has(tab.groupId)) {
+    const record = recordFor(tab);
+    record.previousWindow = tab.windowId;
+    record.previousGroup ??= -1;
+    await moveToStorage(tab.id);
   }
   await persist();
   await chrome.alarms.create('fish-sweep', { periodInMinutes: 1 });
@@ -45,10 +56,33 @@ async function broadcastSettings() {
     if (webUrl(tab.url) && !tab.incognito && !tab.discarded && !tab.frozen) notifyTab(tab.id, { type: 'REFRESH_WIDGET' });
   }
 }
-async function restore(id, activate = false) {
-  const tab = await getTab(id), record = records[id];
+async function moveToStorage(id) {
+  if (storageWindowId !== null) {
+    try { await chrome.windows.get(storageWindowId); } catch { storageWindowId = null; }
+  }
+  if (storageWindowId === null) {
+    const window = await chrome.windows.create({ url: storageUrl(), focused: false, type: 'normal' });
+    storageWindowId = window.id;
+  }
+  await chrome.tabs.move(Number(id), { windowId: storageWindowId, index: -1 });
+  await chrome.windows.update(storageWindowId, { state: 'minimized' });
+}
+async function restore(id, activate = false, targetWindowId) {
+  let tab = await getTab(id); const record = records[id];
   if (!tab || !record) return false;
   if (record.trashedAt) {
+    if (tab.windowId === storageWindowId) {
+      const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
+      const available = windows.filter(window => window.id !== storageWindowId && !window.incognito);
+      const target = available.find(window => window.id === targetWindowId)
+        || available.find(window => window.id === record.previousWindow)
+        || available.find(window => window.focused) || available[0];
+      if (target) tab = await chrome.tabs.move(tab.id, { windowId: target.id, index: -1 });
+      else {
+        const window = await chrome.windows.create({ tabId: tab.id, focused: activate });
+        tab = await chrome.tabs.get(tab.id);
+      }
+    }
     const previous = record.previousGroup;
     if (tab.groupId !== -1) await chrome.tabs.ungroup(tab.id);
     if (previous >= 0) {
@@ -56,27 +90,26 @@ async function restore(id, activate = false) {
     }
     delete record.trashedAt;
     delete record.previousGroup;
+    delete record.previousWindow;
   }
   record.lastActive = Date.now();
-  if (activate) { await chrome.tabs.update(tab.id, { active: true }); await chrome.windows.update(tab.windowId, { focused: true }); }
+  if (activate) {
+    await chrome.tabs.update(tab.id, { active: true });
+    const window = await chrome.windows.get(tab.windowId);
+    await chrome.windows.update(tab.windowId, { focused: true, ...(window.state === 'minimized' ? { state: 'normal' } : {}) });
+  }
   return true;
 }
 async function collect(id) {
-  let tab = await getTab(id);
-  if (!tab) return false;
+  const tab = await getTab(id);
+  if (!tab || tab.windowId === storageWindowId) return false;
   const record = recordFor(tab);
   if (record.trashedAt || protectionReason(tab, record, settings)) return false;
-  const groups = await chrome.tabGroups.query({ windowId: tab.windowId, title: GROUP_TITLE });
-  const previousGroup = tab.groupId;
-  const groupId = await chrome.tabs.group(groups.length ? { tabIds: tab.id, groupId: groups[0].id } : { tabIds: tab.id });
-  // Save recovery metadata before the next API call, even if grouping/collapsing fails.
-  record.trashedAt = Date.now(); record.previousGroup = previousGroup;
+  record.trashedAt = Date.now(); record.previousGroup = tab.groupId; record.previousWindow = tab.windowId;
   await persist();
-  try { await chrome.tabGroups.update(groupId, { title: GROUP_TITLE, color: 'cyan', collapsed: true }); }
+  try { await moveToStorage(tab.id); }
   catch (error) { await restore(id); await persist(); throw error; }
-  tab = await getTab(id);
-  if (!tab || tab.active || protectionReason(tab, record, settings)) { await restore(id); return false; }
-  if (settings.discardOnCollect && !tab.discarded) await chrome.tabs.discard(tab.id).catch(() => {});
+  // Keep the page running: never discard a collected tab.
   totalCollected++;
   await chrome.storage.local.set({ totalCollected });
   return true;
@@ -119,12 +152,12 @@ async function handle(message, sender) {
     case 'RESTORE_TRASH': {
       const target = Number(message.tabId);
       if (!records[target]?.trashedAt) throw new Error('这个标签已被取回或关闭');
-      if (!await restore(target, true)) throw new Error('这个标签已关闭');
+      if (!await restore(target, true, sender.tab?.windowId ?? message.windowId)) throw new Error('这个标签已关闭');
       await persist(); return {};
     }
     case 'ACTIVITY': {
       const tab = await getTab(id);
-      if (tab?.active && webUrl(tab.url)) { if (records[id]?.trashedAt) await restore(id); recordFor(tab).lastActive = Date.now(); await persist(); }
+      if (tab?.active && tab.windowId !== storageWindowId && webUrl(tab.url)) { if (records[id]?.trashedAt) await restore(id); recordFor(tab).lastActive = Date.now(); await persist(); }
       return {};
     }
     case 'SET_WHITELIST': {
@@ -159,7 +192,7 @@ async function handle(message, sender) {
         const record = records[tabId]; if (!record?.trashedAt) continue;
         const tab = await getTab(tabId);
         if (!tab) { delete records[tabId]; continue; }
-        if (protectionReason(tab, record, settings)) { await restore(tabId); kept++; continue; }
+        if (protectionReason({ ...tab, active: tab.windowId === storageWindowId ? false : tab.active }, record, settings)) { await restore(tabId); kept++; continue; }
         await chrome.tabs.remove(tabId); delete records[tabId]; count++;
       }
       await persist(); return { count, kept };
@@ -177,13 +210,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'fish-sweep') serial(async () => { await init(); await sweep(); }); });
 chrome.tabs.onActivated.addListener(({ tabId }) => serial(async () => {
   await init(); const tab = await getTab(tabId);
-  if (tab && webUrl(tab.url) && !tab.incognito) { await restore(tabId); recordFor(tab).lastActive = Date.now(); await persist(); }
+  if (tab && tab.windowId !== storageWindowId && webUrl(tab.url) && !tab.incognito) { await restore(tabId); recordFor(tab).lastActive = Date.now(); await persist(); }
 }));
 chrome.tabs.onUpdated.addListener((id, change, tab) => {
   if (!change.url && change.groupId === undefined) return;
   serial(async () => {
     await init(); if (!webUrl(tab.url) || tab.incognito) { delete records[id]; await persist(); return; }
     const record = recordFor(tab);
+    const currentTab = await getTab(id);
+    if (currentTab?.windowId === storageWindowId) return;
     if (change.url) { if (record.trashedAt) await restore(id); record.lastActive = Date.now(); }
     if (change.groupId !== undefined && record.trashedAt) {
       const current = await getTab(id);

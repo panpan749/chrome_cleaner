@@ -28,7 +28,7 @@
     <p class="surface-status" role="status" hidden></p></section>`;
   const $ = selector => shadow.querySelector(selector);
   const panel = $('.trash-panel'), drawer = $('.whitelist-drawer'), sprite = $('.sprite');
-  let settings, currentId, trash = [], lastActivity = 0, pendingClear = [], isBusy = false, disposed = false;
+  let settings, currentId, currentWindowId, trash = [], lastActivity = 0, pendingClear = [], isBusy = false, disposed = false;
   let noticeTimer, walkTimer, animationTimer, blinkTimer, refreshTimer, paradeEnd;
   let savedPosition = null, drag = null, suppressClickUntil = 0, positionDirty = false;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)'), controller = new AbortController();
@@ -141,7 +141,7 @@
   }
   async function refreshWidget() {
     let supported = true;
-    if (popup) { const [active] = await chrome.tabs.query({ active: true, currentWindow: true }); currentId = active?.id; supported = /^https?:/.test(active?.url || ''); }
+    if (popup) { const [active] = await chrome.tabs.query({ active: true, currentWindow: true }); currentId = active?.id; currentWindowId = active?.windowId; supported = /^https?:/.test(active?.url || ''); }
     const widget = await send('GET_WIDGET', popup ? { tabId: currentId } : {}); if (!widget || disposed) return;
     settings = widget.settings;
     if (!popup) host.style.display = settings.showWidget && !document.fullscreenElement ? 'block' : 'none';
@@ -225,7 +225,7 @@
   }));
   $('.trash-list').addEventListener('click', event => {
     const button = event.target.closest('.trash-tab'); if (!button) return;
-    operate(async () => { await send('RESTORE_TRASH', { tabId: Number(button.dataset.tabId) }); closeTrash(); if (popup) window.close(); });
+    operate(async () => { await send('RESTORE_TRASH', { tabId: Number(button.dataset.tabId), ...(popup ? { windowId: currentWindowId } : {}) }); closeTrash(); if (popup) window.close(); });
   });
   $('.clear-button').addEventListener('click', () => { pendingClear = trash.map(tab => tab.id); $('.clear-description').textContent = `将关闭这 ${pendingClear.length} 个标签，未保存的内容可能丢失。`; $('.clear-confirm').hidden = false; $('.cancel-clear').focus(); });
   $('.cancel-clear').addEventListener('click', () => { $('.clear-confirm').hidden = true; $('.clear-button').focus(); });
